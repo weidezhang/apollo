@@ -130,13 +130,18 @@ class PointCloudParser(SensorMessageParser):
     """
     def __init__(self, output_path, instance_saving=True):
         super(PointCloudParser, self).__init__(output_path, instance_saving)
+        self._save_csv = True
+        self._save_pcd = False
 
-    def convert_xyzit_pb_to_array(self, xyz_i_t, data_type):
+    def convert_xyzit_pb_to_array(self, xyz_i_t, data_type, is_dense=True, laser_cnt=0):
         arr = np.zeros(len(xyz_i_t), dtype=data_type)
         for i, point in enumerate(xyz_i_t):
             # change timestamp to timestamp_sec
-            arr[i] = (point.x, point.y, point.z,
-                      point.intensity, point.timestamp/1e9)
+            if is_dense:
+                arr[i] = (point.x, point.y, point.z,
+                          point.intensity, point.timestamp/1e9)
+            else:
+                arr[i] = (point.x, point.y, point.z, point.intensity, i % laser_cnt)
         return arr
 
     def make_xyzit_point_cloud(self, xyz_i_t):
@@ -172,8 +177,46 @@ class PointCloudParser(SensorMessageParser):
         pc = pypcd.PointCloud(md, pc_data)
         return pc
 
+    def make_xyzir_point_cloud(self, xyz_i_t, laser_cnt):
+        """
+        Make a pointcloud object from PointXYZIT message, as Pointcloud.proto.
+        message PointXYZIT {
+          optional float x = 1 [default = nan];
+          optional float y = 2 [default = nan];
+          optional float z = 3 [default = nan];
+          optional uint32 intensity = 4 [default = 0];
+          optional uint64 timestamp = 5 [default = 0];
+        }
+        """
+        print('len xyzit is %d' % len(xyz_i_t))
+        print('len per laser is %d' % (len(xyz_i_t) / 64))
+        md = {'version': .7,
+              'fields': ['x', 'y', 'z', 'intensity', 'ring'],
+              'count': [1, 1, 1, 1, 1],
+              'width': len(xyz_i_t),
+              'height': 1,
+              'viewpoint': [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+              'points': len(xyz_i_t),
+              'type': ['F', 'F', 'F', 'F', 'U'],
+              'size': [4, 4, 4, 4, 2],
+              'data': 'binary_compressed'}
+
+        typenames = []
+        for t, s in zip(md['type'], md['size']):
+            np_type = pypcd.pcd_type_to_numpy_type[(t, s)]
+            typenames.append(np_type)
+
+        np_dtype = np.dtype(zip(md['fields'], typenames))
+        pc_data = self.convert_xyzit_pb_to_array(xyz_i_t, data_type=np_dtype,
+                                                 is_dense=False, laser_cnt=laser_cnt)
+        pc = pypcd.PointCloud(md, pc_data)
+        return pc
+
     def save_pointcloud_meta_to_file(self, pc_meta, pcd_file):
-            pypcd.save_point_cloud_bin_compressed(pc_meta, pcd_file)
+        pypcd.save_point_cloud_bin_compressed(pc_meta, pcd_file)
+
+    def save_pointcloud_to_csv(self, pc_meta, csv_file):
+        pypcd.save_txt(pc_meta, csv_file)
 
     def _init_parser(self):
         self._msg_parser = pointcloud_pb2.PointCloud()
@@ -187,13 +230,23 @@ class PointCloudParser(SensorMessageParser):
 
         self._timestamps.append(pointcloud.measurement_time)
         # self._timestamps.append(pointcloud.header.timestamp_sec)
-
-        self._parsed_data = self.make_xyzit_point_cloud(pointcloud.point)
+        if pointcloud.is_dense:
+            print('process dense point cloud')
+            self._parsed_data = self.make_xyzit_point_cloud(pointcloud.point)
+        else:
+            print('process not dense point cloud')
+            #TODO: make laser cnt configurable
+            self._parsed_data = self.make_xyzir_point_cloud(pointcloud.point, 64)
 
         if self._instance_saving:
-            file_name = "%06d.pcd" % self.get_msg_count()
-            output_file = os.path.join(self._output_path, file_name)
-            self.save_pointcloud_meta_to_file(pc_meta=self._parsed_data, pcd_file=output_file)
+            if self._save_pcd:
+                file_name = "%06d.pcd" % self.get_msg_count()
+                output_file = os.path.join(self._output_path, file_name)
+                self.save_pointcloud_meta_to_file(pc_meta=self._parsed_data, pcd_file=output_file)
+            if self._save_csv:
+                file_name = "%06d.csv" % self.get_msg_count()
+                output_file = os.path.join(self._output_path, file_name)
+                self.save_pointcloud_to_csv(pc_meta=self._parsed_data, csv_file=output_file)
         else:
             raise ValueError("not implement multiple message concatenation for PointCloud2 topic")
         # TODO(gchen-Apollo): add saint check
