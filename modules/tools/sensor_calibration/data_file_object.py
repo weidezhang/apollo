@@ -63,7 +63,7 @@ class TimestampFileObject(FileObject):
             raise ValueError("timestamps must be in a list")
 
         for i, ts in enumerate(data):
-            self._file_object.write("%06d %.6f\n" %(i, ts))
+            self._file_object.write("%06d %.6f\n" %(i+1, ts))
 
 class OdometryFileObject(FileObject):
     """class to handle gnss/odometry topic"""

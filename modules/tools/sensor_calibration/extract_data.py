@@ -174,6 +174,7 @@ def extract_data(record_files, output_path, channels,
         #     channel_messages[channel] = list()
 
     for record_file in record_files:
+        print('extract record file {}'.format(record_file))
         record_reader = RecordReader(record_file)
         for msg in record_reader.read_messages():
             if msg.topic in channels:

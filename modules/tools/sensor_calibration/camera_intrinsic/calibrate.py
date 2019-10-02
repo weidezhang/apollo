@@ -25,7 +25,8 @@ def calibrate_camera(allCorners, allIds, counter, imsize):
     #print(allIds)
     allIds = np.array(allIds)
     counter = np.array(counter)
-    flags = (cv2.CALIB_RATIONAL_MODEL)
+    #flags = (cv2.CALIB_RATIONAL_MODEL)
+    flags = (0)
     cameraMatrixInit = np.array([[ 2000.,    0., imsize[0]/2.],
                                 [    0., 2000., imsize[1]/2.],
                                 [    0.,    0.,           1.]])
@@ -33,6 +34,7 @@ def calibrate_camera(allCorners, allIds, counter, imsize):
     (ret, camera_matrix, distortion_coefficients0,rotation_vectors, translation_vectors) = cv2.aruco.calibrateCameraAruco(corners = allCorners, ids = allIds, counter = counter, board=board, imageSize=imsize, cameraMatrix = cameraMatrixInit, distCoeffs=distCoeff, flags=flags, criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 10000, 1e-9))
     print(camera_matrix)
     print(distortion_coefficients0)
+    print(distCoeff)
     return ret, camera_matrix, distortion_coefficients0, rotation_vectors, translation_vectors
 
 

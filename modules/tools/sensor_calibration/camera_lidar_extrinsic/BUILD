@@ -9,9 +9,14 @@ cc_library(
         "feature_extractor.h",
         "calibration_data.h",
         "config.h",
+        "openga.h",
+        "optimize.h",
+        "util.h",
     ],
     srcs = [
         "feature_extractor.cc",
+        "optimize.cc",
+        "util.cc",
     ],
     linkopts = [
         "-lopencv_core",
@@ -23,6 +28,8 @@ cc_library(
         "@pcl",
         "@vtk",
         "@eigen",
+        "@ros//:ros_common",
+        "//external:gflags",
     ],
 )
 
@@ -38,4 +45,4 @@ cc_binary(
 
 
 
-cpplint()
+#cpplint()

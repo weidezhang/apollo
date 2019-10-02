@@ -130,18 +130,28 @@ class PointCloudParser(SensorMessageParser):
     """
     def __init__(self, output_path, instance_saving=True):
         super(PointCloudParser, self).__init__(output_path, instance_saving)
-        self._save_csv = True
-        self._save_pcd = False
-
-    def convert_xyzit_pb_to_array(self, xyz_i_t, data_type, is_dense=True, laser_cnt=0):
+        self._save_csv = False
+        self._save_pcd = True
+   
+    #support 3 output format:
+    #0: corresponds to make_xyzi_point_cloud
+    #1: corresponds to make_xyzi_organized_point_cloud
+    #2: corresponds to make_xyzir_point_cloud
+    def convert_xyzit_pb_to_array(self, xyz_i_t, data_type, outputformat=0, laser_cnt=0):
         arr = np.zeros(len(xyz_i_t), dtype=data_type)
+        pt_per_height = len(xyz_i_t) if laser_cnt==0 else len(xyz_i_t)/laser_cnt
+        print("pt per height {}".format(pt_per_height)) 
         for i, point in enumerate(xyz_i_t):
             # change timestamp to timestamp_sec
-            if is_dense:
+            if outputformat==0:
                 arr[i] = (point.x, point.y, point.z,
                           point.intensity, point.timestamp/1e9)
-            else:
+            elif outputformat==2:
                 arr[i] = (point.x, point.y, point.z, point.intensity, i % laser_cnt)
+            elif outputformat ==1:
+                idx_col = int(i / laser_cnt)
+                idx_row = (i % laser_cnt) * pt_per_height
+                arr[idx_row + idx_col] = (point.x, point.y, point.z, point.intensity) 
         return arr
 
     def make_xyzit_point_cloud(self, xyz_i_t):
@@ -177,6 +187,39 @@ class PointCloudParser(SensorMessageParser):
         pc = pypcd.PointCloud(md, pc_data)
         return pc
 
+    def make_xyzi_organized_point_cloud(self, xyz_i_t, laser_cnt):
+        """
+        Make a pointcloud object from PointXYZIT message, as Pointcloud.proto.
+        message PointXYZIT {
+          optional float x = 1 [default = nan];
+          optional float y = 2 [default = nan];
+          optional float z = 3 [default = nan];
+          optional float intensity = 4 [default = 0];
+        }
+        """
+
+        md = {'version': .7,
+              'fields': ['x', 'y', 'z', 'intensity'],
+              'count': [1, 1, 1, 1],
+              'width': len(xyz_i_t) / laser_cnt,
+              'height': laser_cnt,
+              'viewpoint': [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+              'points': len(xyz_i_t),
+              'type': ['F', 'F', 'F', 'F'],
+              'size': [4, 4, 4, 4],
+              'data': 'ascii'}
+
+        typenames = []
+        for t, s in zip(md['type'], md['size']):
+            np_type = pypcd.pcd_type_to_numpy_type[(t, s)]
+            typenames.append(np_type)
+
+        np_dtype = np.dtype(zip(md['fields'], typenames))
+        pc_data = self.convert_xyzit_pb_to_array(xyz_i_t, data_type=np_dtype, outputformat=1,laser_cnt=laser_cnt)
+        pc = pypcd.PointCloud(md, pc_data)
+        return pc
+
+
     def make_xyzir_point_cloud(self, xyz_i_t, laser_cnt):
         """
         Make a pointcloud object from PointXYZIT message, as Pointcloud.proto.
@@ -188,8 +231,8 @@ class PointCloudParser(SensorMessageParser):
           optional uint64 timestamp = 5 [default = 0];
         }
         """
-        print('len xyzit is %d' % len(xyz_i_t))
-        print('len per laser is %d' % (len(xyz_i_t) / 64))
+        #print('len xyzit is %d' % len(xyz_i_t))
+        #print('len per laser is %d' % (len(xyz_i_t) / 64))
         md = {'version': .7,
               'fields': ['x', 'y', 'z', 'intensity', 'ring'],
               'count': [1, 1, 1, 1, 1],
@@ -208,7 +251,7 @@ class PointCloudParser(SensorMessageParser):
 
         np_dtype = np.dtype(zip(md['fields'], typenames))
         pc_data = self.convert_xyzit_pb_to_array(xyz_i_t, data_type=np_dtype,
-                                                 is_dense=False, laser_cnt=laser_cnt)
+                                                 outputformat=2, laser_cnt=laser_cnt)
         pc = pypcd.PointCloud(md, pc_data)
         return pc
 
@@ -231,12 +274,13 @@ class PointCloudParser(SensorMessageParser):
         self._timestamps.append(pointcloud.measurement_time)
         # self._timestamps.append(pointcloud.header.timestamp_sec)
         if pointcloud.is_dense:
-            print('process dense point cloud')
+            #print('process dense point cloud')
             self._parsed_data = self.make_xyzit_point_cloud(pointcloud.point)
         else:
-            print('process not dense point cloud')
+            #print('process not dense point cloud')
             #TODO: make laser cnt configurable
-            self._parsed_data = self.make_xyzir_point_cloud(pointcloud.point, 64)
+            #self._parsed_data = self.make_xyzir_point_cloud(pointcloud.point, 64)
+            self._parsed_data = self.make_xyzi_organized_point_cloud(pointcloud.point, 64)
 
         if self._instance_saving:
             if self._save_pcd:

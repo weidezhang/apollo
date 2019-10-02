@@ -2,7 +2,11 @@
 #include "opencv2/imgproc/imgproc.hpp"
 #include "opencv2/highgui/highgui.hpp"
 
-void PointCloudFeatureExtractor::CalFeature(PointCloudIRPtr cloud, VelodyneCalibrationData *data) {
+Bound PointCloudFeatureExtractor::bound;
+
+void PointCloudFeatureExtractor::CalFeature(PointCloudIRPtr cloud, VelodyneCalibrationData *data, bool vis) {
+    vis_ = vis;
+    all_ptr_ = cloud;
     PointCloudIRPtr out = ExtractROI(cloud);
     std::cout<<"finished extracting roi out size " << out->points.size()<<std::endl;
     assert(out->points.size() > 0);
@@ -45,8 +49,7 @@ PointCloudIRPtr ExtractInlier(PointCloudIRPtr cloud, pcl::PointIndices::Ptr inli
 
 
 void PointCloudFeatureExtractor::ExtractPlane(PointCloudIRPtr cloud_passthrough, VelodyneCalibrationData *data) {
-    //VelodyneCalibrationData& feature_data = *data;
-    
+    VelodyneCalibrationData& feature_data = *data;
     original_ptr_ = cloud_passthrough;
     pcl::PassThrough<pcl::PointXYZIR> pass_z;
     PointCloudIRPtr cloud_filtered(new PointCloudIR),
@@ -65,7 +68,8 @@ void PointCloudFeatureExtractor::ExtractPlane(PointCloudIRPtr cloud_passthrough,
     }
         std::cout<<"finished extracting roi1"<<std::endl;
     // 20inch x 30inch board with multiplier 0.0254 to meter
-    double diagonal = sqrt(pow(20 * 0.0254,2) + pow(30 * 0.0254,2));
+    Config cfg;
+    double diagonal = sqrt(pow(cfg.board_dimension[0]/1000.0f,2) + pow(cfg.board_dimension[1]/1000.0f,2));
     // subtract by approximate diagonal length (in metres)
     double z_min = z_max - diagonal;
 
@@ -86,7 +90,8 @@ void PointCloudFeatureExtractor::ExtractPlane(PointCloudIRPtr cloud_passthrough,
     seg.setModelType (pcl::SACMODEL_PLANE);
     seg.setMethodType (pcl::SAC_RANSAC);
     seg.setMaxIterations (1000);
-    seg.setDistanceThreshold (0.004);
+    seg.setDistanceThreshold (0.04);
+    //seg.setDistanceThreshold(0.1);
     pcl::ExtractIndices<pcl::PointXYZIR> extract;
     seg.setInputCloud (cloud_filtered2);
     seg.segment (*inliers, *coefficients);
@@ -95,8 +100,8 @@ void PointCloudFeatureExtractor::ExtractPlane(PointCloudIRPtr cloud_passthrough,
     plane_ptr_ = ExtractInlier(cloud_filtered2, inliers); //save fitted plane point cloud
 
     // Plane normal vector magnitude
-    //float mag = static_cast<float>(sqrt(pow(coefficients->values[0], 2) + pow(coefficients->values[1], 2)
-    //    + pow(coefficients->values[2], 2)));
+    float mag = static_cast<float>(sqrt(pow(coefficients->values[0], 2) + pow(coefficients->values[1], 2)
+        + pow(coefficients->values[2], 2)));
     //std::cout<<"finished extracting roi3"<<std::endl;
     // Project the inliers on the fit plane
     pcl::PointCloud<pcl::PointXYZIR>::Ptr cloud_projected (new pcl::PointCloud<pcl::PointXYZIR>);
@@ -111,50 +116,56 @@ void PointCloudFeatureExtractor::ExtractPlane(PointCloudIRPtr cloud_passthrough,
     PointCloudIRPtr saved; 
     std::vector<Eigen::Vector3f> pts = FitTableTopBbx(plane_ptr_, coefficients, &saved);
 
-
-    // input data
-    /*feature_data.velodynepoint[0] = (basic_cloud_ptr->points[0].x + basic_cloud_ptr->points[1].x)*1000/2;
-    feature_data.velodynepoint[1] = (basic_cloud_ptr->points[0].y + basic_cloud_ptr->points[1].y)*1000/2;
-    feature_data.velodynepoint[2] = (basic_cloud_ptr->points[0].z + basic_cloud_ptr->points[1].z)*1000/2;
+    assert(pts.size()==5); //4 corners plus center of the plane detected
+    //center point in millimeters
+    feature_data.velodynepoint[0] = pts[4].x();
+    feature_data.velodynepoint[1] = pts[4].y();
+    feature_data.velodynepoint[2] = pts[4].z();
     feature_data.velodynenormal[0] = -coefficients->values[0]/mag;
     feature_data.velodynenormal[1] = -coefficients->values[1]/mag;
     feature_data.velodynenormal[2] = -coefficients->values[2]/mag;
-    double top_down_radius = sqrt(pow(feature_data.velodynepoint[0]/1000,2)
-        + pow(feature_data.velodynepoint[1]/1000,2));
-    double x_comp = feature_data.velodynepoint[0]/1000 + feature_data.velodynenormal[0]/2;
-    double y_comp = feature_data.velodynepoint[1]/1000 + feature_data.velodynenormal[1]/2;
+
+
+    double top_down_radius = sqrt(pow(feature_data.velodynepoint[0],2)
+        + pow(feature_data.velodynepoint[1],2));
+    double x_comp = feature_data.velodynepoint[0] + feature_data.velodynenormal[0]/2;
+    double y_comp = feature_data.velodynepoint[1] + feature_data.velodynenormal[1]/2;
     double vector_dist = sqrt(pow(x_comp,2) + pow(y_comp,2));
     if (vector_dist > top_down_radius)
     {
+      std::cout<<"revert sign for normal"<<std::endl;
       feature_data.velodynenormal[0] = -feature_data.velodynenormal[0];
       feature_data.velodynenormal[1] = -feature_data.velodynenormal[1];
       feature_data.velodynenormal[2] = -feature_data.velodynenormal[2];
     }
-    feature_data.velodynecorner[0] = basic_cloud_ptr->points[2].x;
-    feature_data.velodynecorner[1] = basic_cloud_ptr->points[2].y;
-    feature_data.velodynecorner[2] = basic_cloud_ptr->points[2].z;*/
 
+    //corner
+    feature_data.velodynecorner[0] = pts[0].x();
+    feature_data.velodynecorner[1] = pts[0].y();
+    feature_data.velodynecorner[2] = pts[0].z();
+     
+    //purely for visualization purposes
     PointCloudIRPtr basic_cloud_ptr (new PointCloudIR);
-    //adding pca based corners
-    /*for(auto pt: corners) {
-       basic_cloud_ptr->points.push_back(pt);
-    }*/
-
     for(int i=0; i<static_cast<int>(pts.size());++i) {
         basic_cloud_ptr->points.push_back(PointXYZIR{pts[i].x(), pts[i].y(), pts[i].z(), 0.0, 0});
     } 
 
     std::cout<<"basic cloud size is " << basic_cloud_ptr->size() << std::endl; 
 
-    PointCloudVisualizerPtr viewer = InitViewer(cloud_passthrough);
-
-    VisualizePlane(viewer, cloud_projected,  basic_cloud_ptr);
-    //pcl::visualization::PointCloudColorHandlerCustom<PointXYZIR> color_handler1(saved, 0, 0, 255);
-    //viewer->addPointCloud(saved, color_handler1, "projected1");
-    //viewer->saveScreenshot(std::string("./tmp.png"));
+    if (vis_) {
+       PointCloudVisualizerPtr viewer = InitViewer(cloud_passthrough);
+       plane_normal_ = PointXYZIR{static_cast<float>(feature_data.velodynenormal[0]), 
+                               static_cast<float>(feature_data.velodynenormal[1]), 
+                               static_cast<float>(feature_data.velodynenormal[2]), 0, 0};
+       plane_center_ = PointXYZIR{static_cast<float>(feature_data.velodynepoint[0]), 
+                               static_cast<float>(feature_data.velodynepoint[1]), 
+                               static_cast<float>(feature_data.velodynepoint[2]), 0, 0};
+       VisualizePlane(viewer, cloud_projected,  basic_cloud_ptr);
     
-    viewer->spin();
-     
+       //pcl::visualization::PointCloudColorHandlerCustom<PointXYZIR> color_handler1(saved, 0, 0, 255);
+       //viewer->addPointCloud(saved, color_handler1, "projected1");
+       viewer->spin();
+     }
 }
 
 PointCloudIRPtr PointCloudFeatureExtractor::ApplyFilter(PointCloudIRPtr cloud) {
@@ -205,15 +216,18 @@ PointCloudVisualizerPtr PointCloudFeatureExtractor::InitViewer(PointCloudIRPtr c
     return (viewer);
 }
 
-void PointCloudFeatureExtractor::VisualizePlane(PointCloudVisualizer::Ptr viewer, PointCloudIRPtr cloud_filtered, PointCloudIRPtr basic_cloud_ptr) {
+void PointCloudFeatureExtractor::VisualizePlane(PointCloudVisualizer::Ptr viewer, PointCloudIRPtr cloud_filtered, 
+                                                PointCloudIRPtr basic_cloud_ptr) {
      //pcl::visualization::PointCloudColorHandlerCustom<PointXYZIR> color_handler(cloud_filtered,  255, 0, 0);
      //viewer->addPointCloud(cloud_filtered, color_handler, "projected");
-     for (int i=0; i < static_cast<int>(basic_cloud_ptr->points.size()-1); ++i) {
+     int psize = static_cast<int>(basic_cloud_ptr->points.size());
+     for (int i=0; i < (psize-2); ++i) {
        std::cout<<"x y z" <<basic_cloud_ptr->points[i].x <<" " << basic_cloud_ptr->points[i].y << " " << basic_cloud_ptr->points[i].z << std::endl;
        std::string id = std::to_string(i);
        viewer->addLine<PointXYZIR>(basic_cloud_ptr->points[i], basic_cloud_ptr->points[i+1], 255, 0, 0, id);
      }
-     viewer->addLine<PointXYZIR>(basic_cloud_ptr->points[0], basic_cloud_ptr->points[basic_cloud_ptr->size()-1], 255, 0, 0, "last");
+     viewer->addLine<PointXYZIR>(basic_cloud_ptr->points[0], basic_cloud_ptr->points[psize-2], 255, 0, 0, "last");
+     viewer->addSphere<PointXYZIR>(basic_cloud_ptr->points[psize-1], 0.03);
 }
 
 
@@ -243,7 +257,7 @@ void calcHist(const Eigen::VectorXf& data, const float min_x, const float max_x,
   avgcnt = totalcnt / totalvalidbin;
   std::cout<<"avg cnt is "<<avgcnt << std::endl;
   for(int i=0;i<num_bins;++i) {
-     if(hist_counts[i] < avgcnt) {
+     if(hist_counts[i] < (avgcnt/3.0f)) {
          indices.insert(indices.end(), hist[i].begin(), hist[i].end());
      }
   }
@@ -251,18 +265,28 @@ void calcHist(const Eigen::VectorXf& data, const float min_x, const float max_x,
 
 
 
-void RemoveOrAddPC(pcl::visualization::PCLVisualizer *viewer, PointCloudIRPtr cloud, double r, double g, double b, std::string id) {
+void PointCloudFeatureExtractor::RemoveOrAddPC(pcl::visualization::PCLVisualizer *viewer, PointCloudIRPtr cloud, double r, double g, double b, 
+                   std::string id) {
    bool status = viewer->removePointCloud(id);
    if (!status) {
       pcl::visualization::PointCloudColorHandlerCustom<PointXYZIR> color_handler(cloud, r, g, b);
-      viewer->addPointCloud<PointXYZIR> (cloud, color_handler, id);  
+      viewer->addPointCloud<PointXYZIR> (cloud, color_handler, id); 
+      if(id == "project") {
+        /*pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>());
+        normals->push_back(normal);
+        viewer->addPointCloudNormals<PointXYZIR, pcl::Normal> (cloud, normals,10, 0.05f, "normals");*/
+        PointXYZIR dest = plane_normal_;
+        dest.x += plane_center_.x;
+        dest.y += plane_center_.y;
+        dest.z += plane_center_.z;
+        viewer->addArrow<PointXYZIR>(dest, plane_center_, 1.0, 1.0, 1.0, "normals");
+      } 
    }
 }
 
 void PointCloudFeatureExtractor::KeyboardEventOccurred(const pcl::visualization::KeyboardEvent &event,
-                            void* viewer_void)
-{
-  static std::string original = "original", plane="plane", project="project";
+                            void* viewer_void) {
+  static std::string original = "original", plane="plane", project="project", all="all";
 
   pcl::visualization::PCLVisualizer *viewer = static_cast<pcl::visualization::PCLVisualizer *> (viewer_void);
 
@@ -274,12 +298,22 @@ void PointCloudFeatureExtractor::KeyboardEventOccurred(const pcl::visualization:
 
   if (event.getKeySym () == "o" && event.keyDown()) {
       std::cout<<"visualization of o" << std::endl;
-      RemoveOrAddPC(viewer, original_ptr_, 255, 255, 255, original);
+      RemoveOrAddPC(viewer, original_ptr_, 0, 0, 255, original);
   }  
 
   if (event.getKeySym () == "r" && event.keyDown()) {
       std::cout<<"visualization of r" << std::endl;
       RemoveOrAddPC(viewer, projected_ptr_, 255, 0, 0, project);
+  }
+
+  if (event.getKeySym () == "a" && event.keyDown()) {
+      std::cout<<"visualization of a" << std::endl;
+      RemoveOrAddPC(viewer, all_ptr_, 255, 255, 255, all);
+  }
+
+  if (event.getKeySym () == "q" && event.keyDown()) {
+      std::cout<<"closing" << std::endl;
+      viewer->close();
   }
 }
 
@@ -316,12 +350,6 @@ PointCloudIRPtr ApplyPCAHistogramFilter(PointCloudIR& cloud_projected) {
     return saved;*/
     return saved;     
 }
-
-/*PointCloudIRPtr ApplyRectDirectionalFilter(PointCloudIR& cloud_projected) {
-
-
-
-}*/
 
 std::vector<Eigen::Vector3f> 
 PointCloudFeatureExtractor::FitTableTopBbx(PointCloudIRPtr &cloud, pcl::ModelCoefficients::Ptr table_coefficients_const_, PointCloudIRPtr *saved) { 
@@ -413,61 +441,14 @@ PointCloudFeatureExtractor::FitTableTopBbx(PointCloudIRPtr &cloud, pcl::ModelCoe
     Eigen::Vector3f pbbx(rrPts[ii].x*u + rrPts[ii].y*v + p0); 
     table_top_bbx.push_back(pbbx); 
   } 
-  //Eigen::Vector3f center(rrect.center.x*u + rrect.center.y*v + p0); 
-  //table_top_bbx.push_back(center); 
+  Eigen::Vector3f center(rrect.center.x*u + rrect.center.y*v + p0); 
+  table_top_bbx.push_back(center); 
 
   return table_top_bbx; 
 } 
 
 
-double * ConvertoImgpts(double x, double y, double z, const Config& cfg)
-{  
-  double tmpxC = x/z;
-  double tmpyC = y/z;
-  cv::Point2d planepointsC;
-  planepointsC.x = tmpxC;
-  planepointsC.y = tmpyC;
-  double r2 = tmpxC*tmpxC + tmpyC*tmpyC;
-
-  if (cfg.fisheye_model)
-  {
-    double r1 = pow(r2,0.5);
-    double a0 = std::atan(r1);
-    // distortion function for a fisheye lens
-    double a1 = a0*(1 + cfg.distcoeff.at<double>(0)*pow(a0,2) + cfg.distcoeff.at<double>(1)*pow(a0,4)
-                    + cfg.distcoeff.at<double>(2)*pow(a0,6) + cfg.distcoeff.at<double>(3)*pow(a0,8));
-    planepointsC.x = (a1/r1)*tmpxC;
-    planepointsC.y = (a1/r1)*tmpyC;
-    planepointsC.x = cfg.cameramat.at<double>(0,0)*planepointsC.x + cfg.cameramat.at<double>(0,2);
-    planepointsC.y = cfg.cameramat.at<double>(1,1)*planepointsC.y + cfg.cameramat.at<double>(1,2);
-  }
-  else // For pinhole camera model
-  {
-    double tmpdist = 1 + cfg.distcoeff.at<double>(0)*r2 + cfg.distcoeff.at<double>(1)*r2*r2 +
-        cfg.distcoeff.at<double>(4)*r2*r2*r2;
-    planepointsC.x = tmpxC*tmpdist + 2*cfg.distcoeff.at<double>(2)*tmpxC*tmpyC +
-        cfg.distcoeff.at<double>(3)*(r2+2*tmpxC*tmpxC);
-    planepointsC.y = tmpyC*tmpdist + cfg.distcoeff.at<double>(2)*(r2+2*tmpyC*tmpyC) +
-        2*cfg.distcoeff.at<double>(3)*tmpxC*tmpyC;
-    planepointsC.x = cfg.cameramat.at<double>(0,0)*planepointsC.x + cfg.cameramat.at<double>(0,2);
-    planepointsC.y = cfg.cameramat.at<double>(1,1)*planepointsC.y + cfg.cameramat.at<double>(1,2);
-  }
-
-  double * img_coord = new double[2];
-  *(img_coord) = planepointsC.x;
-  *(img_coord+1) = planepointsC.y;
-
-  return img_coord;
-}
-
-
-void CameraFeatureExtractor::CalFeature(Config &cfg, cv::Mat cv_image) {
-
-  //TODO: if in inches, convert to mm
-  cfg.cameramat = (cv::Mat_<double>(3,3) << 1977.99959, 0, 941.951859, 0, 1980.44291, 523.704889, 0, 0, 1);
-  //cfg.distcoeff_num = 8; 
-  cfg.distcoeff = (cv::Mat_<double>(1,8) <<-1.01882078e+01, 2.72324327e+01, -3.13564463e-04,5.19166521e-03, 4.62080728e+00,
-                                        -9.77136872e+00, 2.29067012e+01, 1.67344873e+01);
+bool CameraFeatureExtractor::CalFeature(Config &cfg, cv::Mat cv_image, CameraCalibrationData &data, bool vis) {
   cv::Mat corner_vectors = cv::Mat::eye(3,5,CV_64F);
   cv::Mat chessboard_normal = cv::Mat(1,3,CV_64F);
   // checkerboard corners, middle square corners, board corners and centre
@@ -565,29 +546,44 @@ void CameraFeatureExtractor::CalFeature(Config &cfg, cv::Mat cv_image) {
     // Pinhole model
     else
     {
-          std::cout<<"1" << std::endl;
+      //one to one correspondence between corners and grid3d points
       cv::solvePnP(grid3dpoint, corners, cfg.cameramat, cfg.distcoeff, rvec, tvec);
       cv::projectPoints(grid3dpoint, rvec, tvec, cfg.cameramat, cfg.distcoeff, image_points);
-    std::cout<<"1" << std::endl;
       // Mark the centre square corner points
       cv::projectPoints(square_edge, rvec, tvec, cfg.cameramat, cfg.distcoeff, imagePoints1);
       cv::projectPoints(boardcorners, rvec, tvec, cfg.cameramat, cfg.distcoeff, imagePoints);
 
         for (int i = 0; i < static_cast<int>(square_edge.size()); i++)
-          cv::circle(cv_image, imagePoints1[i], 5, CV_RGB(0,255,0), -1);
-//        // Mark the board corner points and centre point
+            cv::circle(cv_image, imagePoints1[i], 5, CV_RGB(0,255,0), -1);
+        // Mark the board corner points and centre point
         for (int i = 0; i < static_cast<int>(boardcorners.size()); i++)
             cv::circle(cv_image, imagePoints[i], 5, CV_RGB(0,0,255), -1);
-      for (int i=0; i<static_cast<int>(image_points.size()); ++i) {
-          cv::circle(cv_image, image_points[i], 5, CV_RGB(255,0,0), -1);
+        for (int i=0; i<static_cast<int>(image_points.size()); ++i) {
+            cv::circle(cv_image, image_points[i], 5, CV_RGB(255,0,0), -1);
+            cv::putText(cv_image, std::to_string(i), corners[i], cv::FONT_HERSHEY_COMPLEX_SMALL, // Font
+            1.0, // Scale. 2.0 = 2x bigger
+            cv::Scalar(255,255,255));
       }
-      cv::namedWindow( "Display window", cv::WINDOW_AUTOSIZE );// Create a window for display.
-      cv::imshow( "Display window", cv_image);                   // Show our image inside it.
-      cv::waitKey(0); 
+
+      //print normal point
+      std::vector<cv::Point3f> normals;
+      std::vector<cv::Point2f> image_points2;
+      normals.push_back(cv::Point3f{0,0,100});
+      cv::projectPoints(normals, rvec, tvec,cfg.cameramat, cfg.distcoeff, image_points2);
+
+      for (int i=0; i<static_cast<int>(image_points2.size()); ++i) {
+          cv::circle(cv_image, image_points2[i], 5, CV_RGB(0,255,0), -1);
+      }
+
+      if (vis) {
+         cv::namedWindow( "Display window", cv::WINDOW_AUTOSIZE );// Create a window for display.
+         cv::imshow( "Display window", cv_image);                   // Show our image inside it.
+         cv::waitKey(0);
+      } 
     }
     
     // chessboardpose is a 3*4 transform matrix that transforms points in board frame to camera frame | R&T
-    /*cv::Mat chessboardpose = cv::Mat::eye(4,4,CV_64F);
+    cv::Mat chessboardpose = cv::Mat::eye(4,4,CV_64F);
     cv::Mat tmprmat = cv::Mat(3,3,CV_64F); // rotation matrix
     cv::Rodrigues(rvec,tmprmat); // Euler angles to rotation matrix
 
@@ -616,7 +612,7 @@ void CameraFeatureExtractor::CalFeature(Config &cfg, cv::Mat cv_image) {
             chessboardpose.at<double>(i,1)*pt.y + chessboardpose.at<double>(i,3);
       }
 
-      // convert 3D coordinates to image coordinates
+      /*// convert 3D coordinates to image coordinates
       double * img_coord = ConvertoImgpts(corner_vectors.at<double>(0,k),
                                                                corner_vectors.at<double>(1,k),
                                                                corner_vectors.at<double>(2,k), cfg);
@@ -638,7 +634,19 @@ void CameraFeatureExtractor::CalFeature(Config &cfg, cv::Mat cv_image) {
             8, CV_RGB(255,255,255),-1); //white for centre
 
       delete[] img_coord;
-    }*/
-  }
+      */
+    }
 
+    data.camerapoint[0] = corner_vectors.at<double>(0,4)/1000; //coverts back to meter
+    data.camerapoint[1] = corner_vectors.at<double>(1,4)/1000;
+    data.camerapoint[2] = corner_vectors.at<double>(2,4)/1000;
+    data.cameranormal[0] = chessboard_normal.at<double>(0);
+    data.cameranormal[1] = chessboard_normal.at<double>(1);
+    data.cameranormal[2] = chessboard_normal.at<double>(2);
+    data.pixeldata = sqrt(pow((imagePoints1[1].x - imagePoints1[0].x), 2) +
+        pow((imagePoints1[1].y - imagePoints1[0].y),2));
+    return true;
+  }
+ 
+  return false;
 }

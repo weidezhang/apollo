@@ -19,6 +19,9 @@
 #include <pcl/common/pca.h>
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/kdtree/kdtree_flann.h>
+#include <pcl/kdtree/flann.h>
+
 //#include <pcl/features/normal_3d.h>
 //#include <pcl/features/organized_edge_detection.h>
 //#include <pcl/features/integral_image_normal.h>
